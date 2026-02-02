@@ -8,7 +8,7 @@ from .chat_model import chat_model
 def initialize_node(state: AgentState) -> AgentState:
     from .prompt import PLANNER_PROMPT
     state["messages"] = [
-        SystemMessage(content=PLANNER_PROMPT)
+        SystemMessage(content=PLANNER_PROMPT.format(user_input=state["user_input"]))
     ]
 
     return state
@@ -16,9 +16,7 @@ def initialize_node(state: AgentState) -> AgentState:
 def planner_agent_node(state: AgentState) -> AgentState:
     messages = state["messages"]
 
-    if state.get("subagents") is None or len(state.get("subagents", [])) == 0:
-        messages.append(HumanMessage(content=state["user_input"]))
-    else:
+    if state.get("subagents") is not None and len(state.get("subagents", [])) != 0:
         subagent_results = [f"Agent: {k}\nResult: {v}\n" for k, v in state.get("subagent_results", {}).items()]
         messages.append(HumanMessage(content="\n".join(subagent_results)))
 

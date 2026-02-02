@@ -7,21 +7,24 @@ The tools available to subagent:
 - get_news: get the news of a topic
 
 Response format:
-{
+{{
     "thinking": "Your thinking process...",
-    "subagents": {
-        "subagent1": {
+    "subagents": {{
+        "subagent1": {{
             "name": "subagent1",
             "system_prompt": "You are a helpful assistant.",
             "task": "question1",
             "tools": ["tool_name1", "tool_name2"]
-        },
-        "subagent2": {
+        }},
+        "subagent2": {{
             "name": "subagent2",
             "system_prompt": "You are a helpful assistant.",
             "task": "question2",
             "tools": ["tool_name3", "tool_name4"]
-        }
-    }
-}
+        }}
+    }}
+}}
+
+Here is the task:
+{user_input}
 """
