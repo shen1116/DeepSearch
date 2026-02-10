@@ -26,6 +26,10 @@ $problem
 
 </Sub_Agent_Responses>
 
+<KEY_INFO_MEMORY>
+$important_info_memory
+</KEY_INFO_MEMORY>
+
 <Sub_Agent_List>
 1. SearchAgent: 负责搜索/整理某个简单的任务，主要可以完成两类任务,复杂的搜索任务可以拆分成多个简单的问题，分配到多个SearchAgent；应先分析任务与已有信息，再拆分query进行多轮检索并收敛最终答案
    (1)确定类型的任务:确定胡歌的毕业院校/确定浙江大学的现任校长
@@ -51,6 +55,14 @@ $problem
 3. 仍存在的知识缺口或问题
 4. 对当前状况的整体评估
 </analysis-summary>
+
+<KEY_INFO_SUMMARY>
+在这里输出“当前已确认的重要信息总结”，用于给下一轮planner复用。
+要求：
+1. 仅保留已经由sub-agent证据支持的关键信息；
+2. 使用简洁短句；
+3. 若目前没有可靠信息，输出“暂无已确认的重要信息”。
+</KEY_INFO_SUMMARY>
 
 <NEW_PLAN>
 在这里制定或修改计划：
@@ -91,5 +103,103 @@ $problem
     4. Sub_Agent需要按照指定的json格式输出，你需要根据当前的计划和分析来决定是否需要创建新的sub-agent，以及这些sub-agent需要完成什么任务，你可以同时调用多个sub-agent完成不同的任务，但是这些任务之间不应该有交集，否则会出现资源的浪费。
     5. 优先使用 "subagents" 作为键名（不要使用 "sub-agents"）。
     6. SearchAgent应允许多轮搜索：先分析任务与已有信息，再拆分query逐步检索，直到得到可回答任务的充分信息，再输出最终答案。
+    7. 每次都要输出 <KEY_INFO_SUMMARY>，并在上一轮基础上增量更新，不要丢失已确认事实。
 </NOTES>
 """)
+
+SEARCH_TOOL_SPECS = """
+可用工具及参数（必须严格按下面结构传参）：
+
+1) google_search
+- 用途：先检索候选网页
+- args:
+  - query: str，必填，搜索关键词
+  - num_results: int，可选，1-10，建议 3-5
+- 示例：
+  {"tool":"google_search","args":{"query":"杭州 亚运会 开幕 时间","num_results":5}}
+
+2) jina_reader
+- 用途：读取具体网页正文（深读）
+- args:
+  - url: str，必填，完整的 http/https 链接
+- 示例：
+  {"tool":"jina_reader","args":{"url":"https://example.com/news"}}
+"""
+
+SEARCH_ROUND_PLANNER_PROMPT = """你是 SearchAgent 的多轮检索执行规划器。
+你会在同一条系统消息中收到结构化输入块：TASK、MAIN_CONTEXT、IMPORTANT_INFO_MEMORY。
+你的任务是：结合当前任务与已有关键信息，决定本轮是否继续检索以及调用哪些工具。
+
+<TASK>
+{task}
+</TASK>
+
+<MAIN_CONTEXT>
+{main_context}
+</MAIN_CONTEXT>
+
+<IMPORTANT_INFO_MEMORY>
+{important_info_memory}
+</IMPORTANT_INFO_MEMORY>
+
+<TOOLS>
+{search_tool_specs}
+</TOOLS>
+
+请严格输出 JSON 对象，格式如下：
+{{
+  "status": "search" 或 "done",
+  "analysis": "本轮判断（需体现从已有证据与重要信息记忆得到的关键信息）",
+  "important_info_summary": "当前已确认的重要信息总结（给下一轮复用）",
+  "knowledge_gaps": ["仍缺失的信息1", "仍缺失的信息2"],
+  "actions": [
+    {{
+      "tool": "google_search 或 jina_reader",
+      "args": {{...}},
+      "purpose": "本次调用目的"
+    }}
+  ]
+}}
+
+规则：
+1. 这是多轮流程：每轮必须基于已有证据与重要信息记忆更新判断。
+2. 若信息不足，status 必须为 "search"，并给出 1-3 个 actions。
+3. 若信息已足够回答，status 必须为 "done"，actions 为空列表。
+4. 每轮都要输出 important_info_summary；在上一轮基础上增量更新，不要丢失已确认事实。
+5. 禁止输出 JSON 以外内容。
+"""
+
+SEARCH_FINAL_ANSWER_PROMPT = """你是 SearchAgent 的总结器。
+请基于以下结构化输入，输出最终回答。
+
+<TASK>
+{task}
+</TASK>
+
+<MAIN_CONTEXT>
+{main_context}
+</MAIN_CONTEXT>
+
+<IMPORTANT_INFO_SUMMARY>
+{important_info_summary}
+</IMPORTANT_INFO_SUMMARY>
+
+<IMPORTANT_INFO_HISTORY_JSON>
+{important_info_history_json}
+</IMPORTANT_INFO_HISTORY_JSON>
+
+<TOTAL_ROUNDS>
+{total_rounds}
+</TOTAL_ROUNDS>
+
+<SEARCH_ROUNDS_JSON>
+{search_rounds_json}
+</SEARCH_ROUNDS_JSON>
+
+输出要求：
+1. 使用中文，表达简洁自然。
+2. 直接回答任务，不要分复杂结构。
+3. 结论优先基于已确认的重要信息与检索证据。
+4. 若证据不足，明确写“目前证据不足”，并给出最可能结论。
+5. 若有明确来源，可在一句话里带上链接；没有也可以不写。
+"""

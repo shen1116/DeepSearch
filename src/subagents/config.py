@@ -5,6 +5,7 @@ SEARCH_AGENT_DEFAULT_TOOLS = ["google_search", "jina_reader"]
 
 SEARCH_AGENT_SYSTEM_PROMPT = """你是 SearchAgent，负责根据任务进行多轮检索与证据整理。
 你需要在每轮中自己判断调用哪个工具，以及传入什么参数。
+每一轮都必须先读取并分析上一轮的工具结果，再决定下一轮行动。
 
 工具参数规范（务必严格遵守）：
 1) google_search

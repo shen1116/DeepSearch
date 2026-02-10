@@ -16,12 +16,21 @@ from .tools import TOOLS
 def initialize_node(state: AgentState) -> AgentState:
     from .prompt import PLANNER_PROMPT
 
-    state["messages"] = [SystemMessage(content=PLANNER_PROMPT.substitute(problem=state["user_input"]))]
+    state["messages"] = [
+        SystemMessage(
+            content=PLANNER_PROMPT.substitute(
+                problem=state["user_input"],
+                important_info_memory="暂无已确认的重要信息",
+            )
+        )
+    ]
     state["new_plan"] = ""
+    state["important_info_summary"] = ""
     state["subagents"] = {}
     state["subagent_results"] = {}
     state["subagent_logs"] = {}
     state["plan_history"] = []
+    state["important_info_history"] = []
     state["subagents_history"] = []
     state["subagent_results_history"] = []
     state["subagent_logs_history"] = []
@@ -33,6 +42,10 @@ def planner_agent_node(state: AgentState) -> AgentState:
     messages = state["messages"]
     subagent_results = state.get("subagent_results", {})
     subagent_logs = state.get("subagent_logs", {})
+    current_important_info = str(state.get("important_info_summary", "")).strip()
+
+    if current_important_info != "":
+        messages.append(HumanMessage(content=f"<KEY_INFO_MEMORY>\n{current_important_info}\n</KEY_INFO_MEMORY>"))
 
     if state.get("subagents") is not None and len(state.get("subagents", [])) != 0:
         subagent_response_messages = [f"Agent: {k}\nResult: {v}\n" for k, v in subagent_results.items()]
@@ -44,6 +57,7 @@ def planner_agent_node(state: AgentState) -> AgentState:
     parsed_response = extract_planner_response_state(response.content, tools_registry=TOOLS)
     new_plan = parsed_response["new_plan"]
     next_subagents = parsed_response["subagents"]
+    next_important_info = str(parsed_response.get("important_info_summary", "")).strip()
 
     if len(subagent_results) > 0:
         state["subagent_results_history"] = state.get("subagent_results_history", []) + [dict(subagent_results)]
@@ -51,10 +65,14 @@ def planner_agent_node(state: AgentState) -> AgentState:
         state["subagent_logs_history"] = state.get("subagent_logs_history", []) + [dict(subagent_logs)]
     if new_plan != "":
         state["plan_history"] = state.get("plan_history", []) + [new_plan]
+    if next_important_info != "":
+        state["important_info_history"] = state.get("important_info_history", []) + [next_important_info]
     if len(next_subagents) > 0:
         state["subagents_history"] = state.get("subagents_history", []) + [dict(next_subagents)]
 
     state["new_plan"] = new_plan
+    if next_important_info != "":
+        state["important_info_summary"] = next_important_info
     state["subagents"] = next_subagents
     state["subagent_results"] = {}
     state["subagent_logs"] = {}
@@ -96,6 +114,10 @@ def invoke_subagent_node(state: AgentState) -> AgentState:
         "search_rounds": [],
         "search_status":
         "",
+        "search_important_info_summary":
+        "",
+        "search_important_info_history":
+        [],
         "result":
         "",
         "messages": [
@@ -111,6 +133,8 @@ def invoke_subagent_node(state: AgentState) -> AgentState:
             "status": search_output.get("search_status", ""),
             "round_count": len(search_output.get("search_rounds", [])),
             "rounds": search_output.get("search_rounds", []),
+            "important_info_summary": search_output.get("search_important_info_summary", ""),
+            "important_info_history": search_output.get("search_important_info_history", []),
             "trace": search_output.get("logs", []),
         }
         return {
@@ -148,7 +172,7 @@ def invoke_subagent_node(state: AgentState) -> AgentState:
 def subagent_node(state: SubagentState) -> SubagentState:
     messages = state["messages"]
 
-    llm = chat_model.bind_tools([TOOLS[tool] for tool in state["tools"]])
+    llm = chat_model.bind_tools([])
     response = llm.invoke(messages)
 
     return {"result": response.content, "messages": [response]}

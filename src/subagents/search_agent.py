@@ -1,73 +1,16 @@
 import json
 from typing import Any
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, SystemMessage
 
 from ..chat_model import chat_model
 from ..planner.parsing import safe_parse_json
+from ..prompt import SEARCH_FINAL_ANSWER_PROMPT, SEARCH_ROUND_PLANNER_PROMPT, SEARCH_TOOL_SPECS
 from ..state import SubagentState
 from ..tools import TOOLS
 
 MAX_SEARCH_ROUNDS = 4
 MAX_ACTIONS_PER_ROUND = 3
-
-TOOL_SPECS = """
-可用工具及参数（必须严格按下面结构传参）：
-
-1) google_search
-- 用途：先检索候选网页
-- args:
-  - query: str，必填，搜索关键词
-  - num_results: int，可选，1-10，建议 3-5
-- 示例：
-  {"tool":"google_search","args":{"query":"杭州 亚运会 开幕 时间","num_results":5}}
-
-2) jina_reader
-- 用途：读取具体网页正文（深读）
-- args:
-  - url: str，必填，完整的 http/https 链接
-- 示例：
-  {"tool":"jina_reader","args":{"url":"https://example.com/news"}}
-"""
-
-SEARCH_ROUND_PLANNER_PROMPT = f"""你是 SearchAgent 的检索执行规划器。
-你的任务是：根据 task、main_context、历史轮次证据，决定本轮是否继续检索，以及调用哪些工具。
-
-{TOOL_SPECS}
-
-请严格输出 JSON 对象，格式如下：
-{{
-  "status": "search" 或 "done",
-  "analysis": "本轮判断",
-  "knowledge_gaps": ["仍缺失的信息1", "仍缺失的信息2"],
-  "actions": [
-    {{
-      "tool": "google_search 或 jina_reader",
-      "args": {{...}},
-      "purpose": "本次调用目的"
-    }}
-  ]
-}}
-
-规则：
-1. 若信息不足，status 必须为 "search"，并给出 1-3 个 actions。
-2. 若信息已足够回答，status 必须为 "done"，actions 为空列表。
-3. 是否使用 jina_reader 由你自行判断；当 snippet 充分时可不深读。
-4. 禁止输出 JSON 以外内容。
-"""
-
-SEARCH_FINAL_ANSWER_PROMPT = """你是 SearchAgent 的总结器。
-请基于任务、上下文和多轮检索证据，输出最终回答。要求：
-1. 使用中文。
-2. 明确区分“事实结论”和“不确定部分”。
-3. 尽量引用证据中的链接（若有）。
-4. 输出结构必须是：
-   - 任务理解
-   - 检索过程摘要
-   - 关键证据
-   - 最终回答
-   - 不确定性与建议
-"""
 
 
 def run_search_agent(state: SubagentState) -> SubagentState:
@@ -78,6 +21,10 @@ def run_search_agent(state: SubagentState) -> SubagentState:
     llm = chat_model.bind_tools([])
 
     rounds: list[dict] = []
+    important_info_summary = str(state.get("search_important_info_summary", "")).strip()
+    important_info_history = [
+        str(item).strip() for item in state.get("search_important_info_history", []) if str(item).strip() != ""
+    ]
     final_status = "completed"
 
     for round_index in range(1, MAX_SEARCH_ROUNDS + 1):
@@ -86,52 +33,73 @@ def run_search_agent(state: SubagentState) -> SubagentState:
             task=task,
             main_context=main_context,
             rounds=rounds,
-            round_index=round_index,
-            available_tools=available_tools,
+            important_info_memory=important_info_summary,
         )
 
         status = str(round_plan.get("status", "search")).strip().lower()
-        actions = _build_actions(
-            raw_actions=round_plan.get("actions"),
-            available_tools=available_tools,
+        next_important_info_summary = _extract_important_info_summary(
+            raw_summary=round_plan.get("important_info_summary"),
+            fallback=important_info_summary,
         )
+        if next_important_info_summary != "":
+            important_info_summary = next_important_info_summary
+            if len(important_info_history) == 0 or important_info_history[-1] != next_important_info_summary:
+                important_info_history.append(next_important_info_summary)
 
-        if status == "done" and len(rounds) > 0:
-            final_status = "early_stop_done"
-            break
-
-        action_results = [_execute_action(action=action) for action in actions]
+        actions: list[dict] = []
+        action_results: list[dict] = []
+        if status != "done":
+            actions = _build_actions(
+                raw_actions=round_plan.get("actions"),
+                available_tools=available_tools,
+            )
+            action_results = [_execute_action(action=action) for action in actions]
 
         round_record = {
-            "round": round_index,
-            "status": status,
-            "analysis": str(round_plan.get("analysis", "")).strip(),
-            "knowledge_gaps": [
-                str(item).strip()
-                for item in round_plan.get("knowledge_gaps", [])
-                if str(item).strip() != ""
-            ]
-            if isinstance(round_plan.get("knowledge_gaps"), list)
-            else [],
-            "actions": actions,
-            "action_results": action_results,
+            "round":
+            round_index,
+            "status":
+            status,
+            "analysis":
+            str(round_plan.get("analysis", "")).strip(),
+            "knowledge_gaps": [str(item).strip() for item in round_plan.get("knowledge_gaps", [])
+                               if str(item).strip() != ""] if isinstance(round_plan.get("knowledge_gaps"), list) else [],
+            "important_info_summary":
+            important_info_summary,
+            "actions":
+            actions,
+            "action_results":
+            action_results,
         }
         rounds.append(round_record)
+
+        if status == "done":
+            final_status = "done" if round_index == 1 else "early_stop_done"
+            break
+    else:
+        final_status = "max_rounds_reached"
 
     final_answer = _finalize_search_answer(
         llm=llm,
         task=task,
         main_context=main_context,
         rounds=rounds,
+        important_info_summary=important_info_summary,
+        important_info_history=important_info_history,
         system_prompt=system_prompt,
     )
 
     return {
         "result": final_answer,
         "messages": [AIMessage(content=final_answer)],
-        "logs": [{"status": final_status, "total_rounds": len(rounds)}],
+        "logs": [{
+            "status": final_status,
+            "total_rounds": len(rounds)
+        }],
         "search_rounds": rounds,
         "search_status": final_status,
+        "search_important_info_summary": important_info_summary,
+        "search_important_info_history": important_info_history,
     }
 
 
@@ -140,33 +108,40 @@ def _plan_next_round(
     task: str,
     main_context: str,
     rounds: list[dict],
-    round_index: int,
-    available_tools: list[str],
+    important_info_memory: str,
 ) -> dict:
-    planning_input = {
-        "task": task,
-        "main_context": main_context,
-        "round_index": round_index,
-        "available_tools": available_tools,
-        "recent_rounds": rounds[-3:],
-    }
-
-    response = llm.invoke(
-        [
-            SystemMessage(content=SEARCH_ROUND_PLANNER_PROMPT),
-            HumanMessage(content=json.dumps(planning_input, ensure_ascii=False)),
-        ]
+    round_system_prompt = SEARCH_ROUND_PLANNER_PROMPT.format(
+        task=task,
+        main_context=main_context,
+        important_info_memory=important_info_memory if important_info_memory != "" else "暂无已确认的重要信息",
+        search_tool_specs=SEARCH_TOOL_SPECS,
     )
+
+    response = llm.invoke([
+        SystemMessage(content=round_system_prompt),
+    ])
 
     parsed = safe_parse_json(response.content)
     if not isinstance(parsed, dict) or len(parsed) == 0:
         return {
             "status": "search",
             "analysis": "策略解析失败。",
+            "important_info_summary": important_info_memory,
             "knowledge_gaps": ["缺少可解析的策略输出"],
             "actions": [],
         }
     return parsed
+
+
+def _extract_important_info_summary(raw_summary: Any, fallback: str) -> str:
+    if isinstance(raw_summary, str):
+        return raw_summary.strip()
+
+    if isinstance(raw_summary, list):
+        lines = [str(item).strip() for item in raw_summary if str(item).strip() != ""]
+        return "\n".join(lines).strip()
+
+    return fallback.strip()
 
 
 def _collect_available_tools(tools: Any) -> list[str]:
@@ -221,13 +196,11 @@ def _build_actions(raw_actions: Any, available_tools: list[str]) -> list[dict]:
         else:
             continue
 
-        actions.append(
-            {
-                "tool": tool_name,
-                "args": action_args,
-                "purpose": str(raw_action.get("purpose", "")).strip(),
-            }
-        )
+        actions.append({
+            "tool": tool_name,
+            "args": action_args,
+            "purpose": str(raw_action.get("purpose", "")).strip(),
+        })
 
     return actions[:MAX_ACTIONS_PER_ROUND]
 
@@ -264,19 +237,19 @@ def _finalize_search_answer(
     task: str,
     main_context: str,
     rounds: list[dict],
+    important_info_summary: str,
+    important_info_history: list[str],
     system_prompt: str,
 ) -> str:
-    synthesis_input = {
-        "task": task,
-        "main_context": main_context,
-        "total_rounds": len(rounds),
-        "rounds": rounds,
-    }
-    final_system_prompt = f"{system_prompt}\n\n{SEARCH_FINAL_ANSWER_PROMPT}"
-    response = llm.invoke(
-        [
-            SystemMessage(content=final_system_prompt),
-            HumanMessage(content=json.dumps(synthesis_input, ensure_ascii=False)),
-        ]
-    )
+    final_system_prompt = (f"{system_prompt}\n\n" + SEARCH_FINAL_ANSWER_PROMPT.format(
+        task=task,
+        main_context=main_context if main_context != "" else "暂无主上下文",
+        important_info_summary=(important_info_summary if important_info_summary != "" else "暂无已确认的重要信息"),
+        important_info_history_json=json.dumps(important_info_history, ensure_ascii=False),
+        total_rounds=len(rounds),
+        search_rounds_json=json.dumps(rounds, ensure_ascii=False),
+    ))
+    response = llm.invoke([
+        SystemMessage(content=final_system_prompt),
+    ])
     return response.content

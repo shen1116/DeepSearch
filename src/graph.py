@@ -1,19 +1,16 @@
-from langgraph.graph import StateGraph
+from langgraph.graph import END, START, StateGraph
 from .state import AgentState, SubagentState
-from .node import initialize_node, planner_agent_node, subagent_node, invoke_subagent_node, subagent_tools_node
-from langgraph.graph import START
-from .edge import tools_edge, spawn_subagent_edge
+from .node import initialize_node, invoke_subagent_node, planner_agent_node, subagent_node
+from .edge import spawn_subagent_edge
 
 
 def create_subgraph():
     subgraph = StateGraph(SubagentState)
 
     subgraph.add_node("subagent", subagent_node)
-    subgraph.add_node("tools", subagent_tools_node)
 
     subgraph.add_edge(START, "subagent")
-    subgraph.add_conditional_edges("subagent", tools_edge)
-    subgraph.add_edge("tools", "subagent")
+    subgraph.add_edge("subagent", END)
 
     return subgraph.compile()
 
