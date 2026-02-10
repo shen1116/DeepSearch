@@ -4,6 +4,7 @@ from .node import initialize_node, planner_agent_node, subagent_node, invoke_sub
 from langgraph.graph import START
 from .edge import tools_edge, spawn_subagent_edge
 
+
 def create_subgraph():
     subgraph = StateGraph(SubagentState)
 
@@ -15,6 +16,7 @@ def create_subgraph():
     subgraph.add_edge("tools", "subagent")
 
     return subgraph.compile()
+
 
 def create_graph():
     graph = StateGraph(AgentState)

@@ -1,4 +1,5 @@
 from typing import TypedDict, Annotated
+from typing_extensions import NotRequired
 from langgraph.graph import add_messages
 from langchain_core.messages import BaseMessage
 
@@ -11,9 +12,17 @@ def merge_dicts(left: dict, right: dict) -> dict:
 
 class AgentState(TypedDict):
     user_input: str
-    messages: Annotated[list[BaseMessage], add_messages]
-    subagents: dict
-    subagent_results: Annotated[dict, merge_dicts]
+    messages: NotRequired[Annotated[list[BaseMessage], add_messages]]
+    subagents: NotRequired[dict]
+    subagent_results: NotRequired[Annotated[dict, merge_dicts]]
+    subagent_logs: NotRequired[Annotated[dict, merge_dicts]]
+    new_plan: NotRequired[str]
+    plan_history: NotRequired[list[str]]
+    subagents_history: NotRequired[list[dict]]
+    subagent_results_history: NotRequired[list[dict]]
+    subagent_logs_history: NotRequired[list[dict]]
+    subagent: NotRequired[dict]
+    main_context: NotRequired[dict]
 
 
 class SubagentState(TypedDict):
@@ -23,3 +32,10 @@ class SubagentState(TypedDict):
     tools: list[str]
     result: str
     messages: Annotated[list[BaseMessage], add_messages]
+    main_context: NotRequired[str]
+    logs: NotRequired[list[dict]]
+    search_rounds: NotRequired[list[dict]]
+    search_status: NotRequired[str]
+    tool_call_id: NotRequired[str]
+    tool_name: NotRequired[str]
+    tool_args: NotRequired[dict]
