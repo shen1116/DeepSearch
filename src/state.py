@@ -1,6 +1,7 @@
 from typing import TypedDict, Annotated
 from langgraph.graph import add_messages
 from langchain_core.messages import BaseMessage
+import operator
 
 
 def merge_dicts(left: dict, right: dict) -> dict:
@@ -10,16 +11,17 @@ def merge_dicts(left: dict, right: dict) -> dict:
 
 
 class AgentState(TypedDict):
-    user_input: str
-    messages: Annotated[list[BaseMessage], add_messages]
+    problem: str
+    plan: str
     subagents: dict
-    subagent_results: Annotated[dict, merge_dicts]
+    subagent_responses: Annotated[dict, merge_dicts]
+    key_info: str
 
 
 class SubagentState(TypedDict):
+    id: str
     name: str
-    system_prompt: str
     task: str
-    tools: list[str]
     result: str
+    tools: list[str]
     messages: Annotated[list[BaseMessage], add_messages]
